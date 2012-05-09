@@ -1142,4 +1142,6 @@
         <item>com.android.inputmethod.latin</item>
     </string-array>
 
+    <!-- True if the Sym key should open the InputMethodPicker (default) -->
+    <bool name="config_symKeyShowsImePicker">true</bool>
 </resources>

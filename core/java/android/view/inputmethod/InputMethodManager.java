@@ -1596,6 +1596,8 @@ public final class InputMethodManager {
             FinishedInputEventCallback callback, Handler handler) {
         synchronized (mH) {
             if (mCurMethod != null) {
+			if (context.getResources().getBoolean(com.android.internal.R.bool.config_symKeyShows
+ImePicker)) {
                 if (event instanceof KeyEvent) {
                     KeyEvent keyEvent = (KeyEvent)event;
                     if (keyEvent.getAction() == KeyEvent.ACTION_DOWN
@@ -1603,6 +1605,7 @@ public final class InputMethodManager {
                             && keyEvent.getRepeatCount() == 0) {
                         showInputMethodPickerLocked();
                         return DISPATCH_HANDLED;
+}
                     }
                 }
 
