@@ -294,6 +294,7 @@ public class PhoneWindowManager implements WindowManagerPolicy {
     boolean mSystemReady;
     boolean mSystemBooted;
     boolean mHdmiPlugged;
+    boolean mWifiDisplayConnected;
     int mDockMode = Intent.EXTRA_DOCK_STATE_UNDOCKED;
     int mLidOpenRotation;
     int mCarDockRotation;
@@ -412,6 +413,8 @@ public class PhoneWindowManager implements WindowManagerPolicy {
     boolean mForceStatusBar;
     boolean mForceStatusBarFromKeyguard;
     boolean mHideLockScreen;
+    boolean mForcingShowNavBar;
+    int mForcingShowNavBarLayer;
 
     // States of keyguard dismiss.
     private static final int DISMISS_KEYGUARD_NONE = 0; // Keyguard not being dismissed.
@@ -934,6 +937,12 @@ public class PhoneWindowManager implements WindowManagerPolicy {
         context.registerReceiver(mMultiuserReceiver, filter);
 
         mVibrator = (Vibrator)context.getSystemService(Context.VIBRATOR_SERVICE);
+        // register for WIFI Display intents
+        IntentFilter wifiDisplayFilter = new IntentFilter(
+                                                Intent.ACTION_WIFI_DISPLAY_VIDEO);
+        Intent wifidisplayIntent = context.registerReceiver(
+                                      mWifiDisplayReceiver, wifiDisplayFilter);
+
         mLongPressVibePattern = getLongIntArray(mContext.getResources(),
                 com.android.internal.R.array.config_longPressVibePattern);
         mVirtualKeyVibePattern = getLongIntArray(mContext.getResources(),
@@ -2952,6 +2961,8 @@ public class PhoneWindowManager implements WindowManagerPolicy {
         mTopFullscreenOpaqueWindowState = null;
         mForceStatusBar = false;
         mForceStatusBarFromKeyguard = false;
+        mForcingShowNavBar = false;
+        mForcingShowNavBarLayer = -1;
         
         mHideLockScreen = false;
         mAllowLockscreenWhenOn = false;
@@ -2966,6 +2977,13 @@ public class PhoneWindowManager implements WindowManagerPolicy {
                                 WindowManager.LayoutParams attrs) {
         if (DEBUG_LAYOUT) Slog.i(TAG, "Win " + win + ": isVisibleOrBehindKeyguardLw="
                 + win.isVisibleOrBehindKeyguardLw());
+        if (mTopFullscreenOpaqueWindowState == null && (win.getAttrs().privateFlags
+                &WindowManager.LayoutParams.PRIVATE_FLAG_FORCE_SHOW_NAV_BAR) != 0) {
+            if (mForcingShowNavBarLayer < 0) {
+                mForcingShowNavBar = true;
+                mForcingShowNavBarLayer = win.getSurfaceLayer();
+            }
+        }
         if (mTopFullscreenOpaqueWindowState == null &&
                 win.isVisibleOrBehindKeyguardLw() && !win.isGoneForLayoutLw()) {
             if ((attrs.flags & FLAG_FORCE_NOT_FULLSCREEN) != 0) {
@@ -3781,6 +3799,28 @@ public class PhoneWindowManager implements WindowManagerPolicy {
                 // and then updates our own bookkeeping based on the now-
                 // current user.
                 mSettingsObserver.onChange(false);
+
+                // force a re-application of focused window sysui visibility.
+                // the window may never have been shown for this user
+                // e.g. the keyguard when going through the new-user setup flow
+                synchronized(mLock) {
+                    mLastSystemUiFlags = 0;
+                    updateSystemUiVisibilityLw();
+                }
+            }
+        }
+    };
+    BroadcastReceiver mWifiDisplayReceiver = new BroadcastReceiver() {
+        public void onReceive(Context context, Intent intent) {
+        String action = intent.getAction();
+            if (action.equals(Intent.ACTION_WIFI_DISPLAY_VIDEO)) {
+                int state = intent.getIntExtra("state", 0);
+                if(state == 1) {
+                    mWifiDisplayConnected = true;
+                } else {
+                    mWifiDisplayConnected = false;
+                }
+                updateRotation(true);
             }
         }
     };
@@ -3993,9 +4033,12 @@ public class PhoneWindowManager implements WindowManagerPolicy {
                 // enable 180 degree rotation while docked.
                 preferredRotation = mDeskDockEnablesAccelerometer
                         ? sensorRotation : mDeskDockRotation;
-            } else if (mHdmiPlugged && mHdmiRotationLock) {
+            } else if ((mHdmiPlugged || mWifiDisplayConnected) &&
+                                                        mHdmiRotationLock) {
                 // Ignore sensor when plugged into HDMI.
-                // Note that the dock orientation overrides the HDMI orientation.
+                // or Wifi display is connected
+                // Note that the dock orientation overrides the HDMI/Wifi
+                // orientation.
                 preferredRotation = mHdmiRotation;
             } else if ((mUserRotationMode == WindowManagerPolicy.USER_ROTATION_FREE
                             && (orientation == ActivityInfo.SCREEN_ORIENTATION_USER
@@ -4495,9 +4538,13 @@ public class PhoneWindowManager implements WindowManagerPolicy {
             // will quickly lose focus once it correctly gets hidden.
             return 0;
         }
-        final int visibility = mFocusedWindow.getSystemUiVisibility()
+        int tmpVisibility = mFocusedWindow.getSystemUiVisibility()
                 & ~mResettingSystemUiFlags
                 & ~mForceClearedSystemUiFlags;
+        if (mForcingShowNavBar && mFocusedWindow.getSurfaceLayer() < mForcingShowNavBarLayer) {
+            tmpVisibility &= ~View.SYSTEM_UI_CLEARABLE_FLAGS;
+        }
+        final int visibility = tmpVisibility;
         int diff = visibility ^ mLastSystemUiFlags;
         final boolean needsMenu = mFocusedWindow.getNeedsMenuLw(mTopFullscreenOpaqueWindowState);
         if (diff == 0 && mLastFocusNeedsMenu == needsMenu
@@ -4683,6 +4730,11 @@ public class PhoneWindowManager implements WindowManagerPolicy {
         if (mTopFullscreenOpaqueWindowState != null) {
             pw.print(prefix); pw.print("mTopFullscreenOpaqueWindowState=");
                     pw.println(mTopFullscreenOpaqueWindowState);
+        }
+        if (mForcingShowNavBar) {
+            pw.print(prefix); pw.print("mForcingShowNavBar=");
+                    pw.println(mForcingShowNavBar); pw.print( "mForcingShowNavBarLayer=");
+                    pw.println(mForcingShowNavBarLayer);
         }
         pw.print(prefix); pw.print("mTopIsFullscreen="); pw.print(mTopIsFullscreen);
                 pw.print(" mHideLockScreen="); pw.println(mHideLockScreen);

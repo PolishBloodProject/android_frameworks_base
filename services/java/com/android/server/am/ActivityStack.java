@@ -54,12 +54,14 @@ import android.os.ParcelFileDescriptor;
 import android.os.PowerManager;
 import android.os.RemoteException;
 import android.os.SystemClock;
+import android.os.SystemProperties;
 import android.os.UserHandle;
 import android.util.EventLog;
 import android.util.Log;
 import android.util.Slog;
 import android.view.Display;
 import android.view.WindowManagerPolicy;
+import com.android.internal.app.ActivityTrigger;
 
 import java.io.IOException;
 import java.lang.ref.WeakReference;
@@ -306,6 +308,16 @@ final class ActivityStack {
         }
     }
 
+    private static final ActivityTrigger mActivityTrigger;
+
+    static {
+        if (SystemProperties.QCOM_HARDWARE) {
+            mActivityTrigger = new ActivityTrigger();
+        } else {
+            mActivityTrigger = null;
+        }
+    }
+
     final Handler mHandler = new Handler() {
         //public Handler() {
         //    if (localLOGV) Slog.v(TAG, "Handler started!");
@@ -327,11 +339,18 @@ final class ActivityStack {
                     // We don't at this point know if the activity is fullscreen,
                     // so we need to be conservative and assume it isn't.
                     Slog.w(TAG, "Activity pause timeout for " + r);
+                    int pid = -1;
+                    long pauseTime = 0;
+                    String m = null;
                     synchronized (mService) {
                         if (r.app != null) {
-                            mService.logAppTooSlow(r.app, r.pauseTime,
-                                    "pausing " + r);
+                            pid = r.app.pid;
                         }
+                        pauseTime = r.pauseTime;
+                        m = "pausing " + r;
+                    }
+                    if (pid > 0) {
+                        mService.logAppTooSlow(pid, pauseTime, m);
                     }
 
                     activityPaused(r != null ? r.appToken : null, true);
@@ -352,11 +371,20 @@ final class ActivityStack {
                 } break;
                 case LAUNCH_TICK_MSG: {
                     ActivityRecord r = (ActivityRecord)msg.obj;
+                    int pid = -1;
+                    long launchTickTime = 0;
+                    String m = null;
                     synchronized (mService) {
                         if (r.continueLaunchTickingLocked()) {
-                            mService.logAppTooSlow(r.app, r.launchTickTime,
-                                    "launching " + r);
+                            if (r.app != null) {
+                                pid = r.app.pid;
+                            }
+                            launchTickTime = r.launchTickTime;
+                            m = "launching " + r;
                         }
+                    }
+                    if (pid > 0) {
+                        mService.logAppTooSlow(pid, launchTickTime, m);
                     }
                 } break;
                 case DESTROY_TIMEOUT_MSG: {
@@ -1468,6 +1496,10 @@ final class ActivityStack {
 
         if (DEBUG_SWITCH) Slog.v(TAG, "Resuming " + next);
 
+        if (mActivityTrigger != null) {
+            mActivityTrigger.activityResumeTrigger(next.intent);
+        }
+
         // If we are currently pausing an activity, then don't do anything
         // until that is done.
         if (mPausingActivity != null) {
@@ -1810,8 +1842,8 @@ final class ActivityStack {
                         }
                         mHistory.add(addPos, r);
                         r.putInHistory();
-                        mService.mWindowManager.addAppToken(addPos, r.appToken, r.task.taskId,
-                                r.info.screenOrientation, r.fullscreen,
+                        mService.mWindowManager.addAppToken(addPos, r.userId, r.appToken,
+                                r.task.taskId, r.info.screenOrientation, r.fullscreen,
                                 (r.info.flags & ActivityInfo.FLAG_SHOW_ON_LOCK_SCREEN) != 0);
                         if (VALIDATE_TOKENS) {
                             validateAppTokensLocked();
@@ -1875,8 +1907,8 @@ final class ActivityStack {
                 mNoAnimActivities.remove(r);
             }
             r.updateOptionsLocked(options);
-            mService.mWindowManager.addAppToken(
-                    addPos, r.appToken, r.task.taskId, r.info.screenOrientation, r.fullscreen,
+            mService.mWindowManager.addAppToken(addPos, r.userId, r.appToken,
+                    r.task.taskId, r.info.screenOrientation, r.fullscreen,
                     (r.info.flags & ActivityInfo.FLAG_SHOW_ON_LOCK_SCREEN) != 0);
             boolean doShow = true;
             if (newTask) {
@@ -1914,8 +1946,8 @@ final class ActivityStack {
         } else {
             // If this is the first activity, don't do any fancy animations,
             // because there is nothing for it to animate on top of.
-            mService.mWindowManager.addAppToken(addPos, r.appToken, r.task.taskId,
-                    r.info.screenOrientation, r.fullscreen,
+            mService.mWindowManager.addAppToken(addPos, r.userId, r.appToken,
+                    r.task.taskId, r.info.screenOrientation, r.fullscreen,
                     (r.info.flags & ActivityInfo.FLAG_SHOW_ON_LOCK_SCREEN) != 0);
             ActivityOptions.abort(options);
         }
@@ -2478,6 +2510,9 @@ final class ActivityStack {
             final int userId = aInfo != null ? UserHandle.getUserId(aInfo.applicationInfo.uid) : 0;
             Slog.i(TAG, "START u" + userId + " {" + intent.toShortString(true, true, true, false)
                     + "} from pid " + (callerApp != null ? callerApp.pid : callingPid));
+            if (mActivityTrigger != null) {
+                mActivityTrigger.activityStartTrigger(intent);
+            }
         }
 
         ActivityRecord sourceRecord = null;
